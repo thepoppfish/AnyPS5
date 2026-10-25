@@ -60,6 +60,8 @@ class CheckMainSyncTests(unittest.TestCase):
         self.repo.git("checkout", "-q", "-b", name)
 
     def test_branch_level_with_main_is_clean_and_not_behind(self):
+        for name in ("main", "feature", "feature..main", "main..feature"):
+            self.repo.write(name, "path matching a revision\n")
         self.branch("feature")
         self.repo.write("other.txt", "y\n")
         self.repo.commit("feature change")
