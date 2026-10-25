@@ -27,6 +27,40 @@ def index(stubs, functional):
 ORIGINAL = index([A_STUB, B_STUB, C_STUB], [A_FUNCTIONAL, SHADER, SHARED])
 
 
+class RelinkTests(unittest.TestCase):
+    def test_angle_relative_destinations(self):
+        targets = {
+            "ARCHITECTURE.md": "../ARCHITECTURE.md",
+            "guide with spaces.md": "../guide with spaces.md",
+            "guide).md": "../guide).md",
+            "guide(.md": "../guide(.md",
+            "guide.md#layout": "../guide.md#layout",
+            "#layout": "../TechnicalDebt.md#layout",
+            "": "../TechnicalDebt.md",
+            r"guide\>name.md": r"../guide\>name.md",
+            r"guide\<name.md": r"../guide\<name.md",
+        }
+        for target, expected in targets.items():
+            with self.subTest(target=target):
+                self.assertEqual(debt_split.relink(f"[guide](<{target}>)", INDEX, "docs/dev/debt/libSceA.md"),
+                                 f"[guide](<{expected}>)")
+
+    def test_angle_absolute_destinations(self):
+        targets = ("https://example.test/guide", "HTTPS://example.test/guide#layout",
+                   "MAILTO:author@example.test", "//example.test/guide", "/guide with spaces.md", "/")
+        for target in targets:
+            with self.subTest(target=target):
+                text = f"[guide](<{target}>)"
+                self.assertEqual(debt_split.relink(text, INDEX, "docs/dev/debt/libSceA.md"), text)
+
+    def test_malformed_angle_destinations(self):
+        targets = ("<guide.md", "<guide<name.md>", "<guide>name.md>", "<guide\nname.md>", "<guide\rname.md>")
+        for target in targets:
+            with self.subTest(target=target):
+                text = f"[guide]({target})"
+                self.assertEqual(debt_split.relink(text, INDEX, "docs/dev/debt/libSceA.md"), text)
+
+
 class DebtSplitTests(unittest.TestCase):
     def test_split_preserves_root_relative_links(self):
         targets = ("/AnyPS5/guide.html#usage", "/images/example.png", "/")
@@ -86,13 +120,16 @@ class DebtSplitTests(unittest.TestCase):
                  "https://example.test/guide", "MAILTO:author@example.test"]
         references = " ".join(f"[reference]({target})" for target in links)
         self.write(INDEX, ORIGINAL.replace(A_STUB, A_STUB + " " + references
-                   + " [local](ARCHITECTURE.md#layout)"))
+                   + " [local](ARCHITECTURE.md#layout) [angle local](<guide with spaces).md#layout>)"
+                   + " [angle web](<https://example.test/guide>)"))
         self.split()
         moved = self.read("docs/dev/debt/libSceA.md")
         for target in links:
             with self.subTest(target=target):
                 self.assertIn(f"[reference]({target})", moved)
         self.assertIn("[local](../ARCHITECTURE.md#layout)", moved)
+        self.assertIn("[angle local](<../guide with spaces).md#layout>)", moved)
+        self.assertIn("[angle web](<https://example.test/guide>)", moved)
         self.assertIn("../../../core/libs/prx/libSceA/Export.cpp", moved)
 
     def test_split_moves_entries_by_their_first_core_link(self):
@@ -135,7 +172,8 @@ class DebtSplitTests(unittest.TestCase):
         return self.tool("resolve")
 
     def test_resolve_moves_added_edited_and_removed_entries(self):
-        added = "- [libSceA](../../core/libs/prx/libSceA/Export.cpp) - `sceAFour` returns 0"
+        added = ("- [libSceA](../../core/libs/prx/libSceA/Export.cpp) - `sceAFour` returns 0"
+                 " [guide](<guide with spaces).md#layout>) [web](<https://example.test/guide>)")
         edited = B_STUB + " and logs once"
         result = self.rebase([A_STUB, added, edited], [A_FUNCTIONAL, SHADER, SHARED])
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -148,6 +186,7 @@ class DebtSplitTests(unittest.TestCase):
         a = self.read("docs/dev/debt/libSceA.md")
         self.assertLess(a.index("`sceAOne`"), a.index("`sceAFour`"))
         self.assertLess(a.index("`sceAFour`"), a.index("### Functional"))
+        self.assertIn("[guide](<../guide with spaces).md#layout>) [web](<https://example.test/guide>)", a)
         self.assertIn(edited.replace("../../", "../../../"), self.read("docs/dev/debt/libSceB.md"))
         self.assertFalse((self.root / "docs/dev/debt/libSceC.md").exists())
         self.assertEqual(self.read(INDEX), self.git("show", "main:" + INDEX).stdout)
