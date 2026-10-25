@@ -2,11 +2,15 @@
 #include "prx/libSceLibreSsl/include/Error.hpp"
 #include "prx/libc/include/General.hpp"
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 static_assert(sizeof(LibreSslAsn1Object) == 40);
@@ -19,6 +23,8 @@ static_assert(offsetof(LibreSslAsn1Object, flags) == 32);
 namespace {
 
 constexpr int ObjectLibrary = 8;
+constexpr int BigNumberLibrary = 3;
+constexpr int AllocationFailure = 65;
 constexpr int AnyFunction = 0xfff;
 constexpr int UnknownNid = 101;
 
@@ -92,7 +98,7 @@ const char* Name(int nid, bool longName) {
     return longName ? object.longName : object.shortName;
 }
 
-void Write(char*& buffer, int& space, const std::string& text) {
+void Write(char*& buffer, int& space, std::string_view text) {
     if (space > 0) {
         const std::size_t copied = std::min(text.size(), static_cast<std::size_t>(space - 1));
         std::memcpy(buffer, text.data(), copied);
@@ -105,6 +111,63 @@ void Write(char*& buffer, int& space, const std::string& text) {
         buffer += written;
         space -= written;
     }
+}
+
+int NumericObjectText(char* buffer, int space, const LibreSslAsn1Object* object) {
+    int result = 0;
+    int remaining = object->length;
+    const unsigned char* bytes = object->data;
+    bool first = true;
+    while (remaining > 0) {
+        std::uint64_t value = 0;
+        bool big = false;
+        std::optional<BigNumber> number;
+        for (;;) {
+            const unsigned char byte = *bytes++;
+            --remaining;
+            if (remaining == 0 && (byte & 0x80)) return 0;
+            if (big) number->Add(byte & 0x7f);
+            else value |= byte & 0x7f;
+            if (!(byte & 0x80)) break;
+            if (!big && value > (std::numeric_limits<std::uint64_t>::max() >> 7)) {
+                number.emplace(value);
+                big = true;
+            }
+            if (big) number->ShiftLeft7();
+            else value <<= 7;
+        }
+        if (first) {
+            first = false;
+            int arc;
+            if (value >= 80) {
+                arc = 2;
+                if (big) number->Subtract(80);
+                else value -= 80;
+            } else {
+                arc = static_cast<int>(value / 40);
+                value -= static_cast<std::uint64_t>(arc) * 40;
+            }
+            if (space > 1) {
+                *buffer++ = static_cast<char>('0' + arc);
+                *buffer = '\0';
+                --space;
+            }
+            ++result;
+        }
+        if (big) {
+            const std::string text = "." + number->Decimal();
+            Write(buffer, space, text);
+            result += static_cast<int>(text.size());
+        } else {
+            char text[32];
+            text[0] = '.';
+            const auto converted = std::to_chars(text + 1, text + sizeof(text), value);
+            const std::string_view part(text, static_cast<std::size_t>(converted.ptr - text));
+            Write(buffer, space, part);
+            result += static_cast<int>(part.size());
+        }
+    }
+    return result;
 }
 
 int ObjectText(char* buffer, int space, const LibreSslAsn1Object* object, const char* function) {
@@ -125,51 +188,12 @@ int ObjectText(char* buffer, int space, const LibreSslAsn1Object* object, const 
             return static_cast<int>(length);
         }
     }
-    int result = 0;
-    int remaining = object->length;
-    const unsigned char* bytes = object->data;
-    bool first = true;
-    while (remaining > 0) {
-        std::uint64_t value = 0;
-        bool big = false;
-        BigNumber number(0);
-        for (;;) {
-            const unsigned char byte = *bytes++;
-            --remaining;
-            if (remaining == 0 && (byte & 0x80)) return 0;
-            if (big) number.Add(byte & 0x7f);
-            else value |= byte & 0x7f;
-            if (!(byte & 0x80)) break;
-            if (!big && value > (std::numeric_limits<std::uint64_t>::max() >> 7)) {
-                number = BigNumber(value);
-                big = true;
-            }
-            if (big) number.ShiftLeft7();
-            else value <<= 7;
-        }
-        if (first) {
-            first = false;
-            int arc;
-            if (value >= 80) {
-                arc = 2;
-                if (big) number.Subtract(80);
-                else value -= 80;
-            } else {
-                arc = static_cast<int>(value / 40);
-                value -= static_cast<std::uint64_t>(arc) * 40;
-            }
-            if (space > 1) {
-                *buffer++ = static_cast<char>('0' + arc);
-                *buffer = '\0';
-                --space;
-            }
-            ++result;
-        }
-        const std::string text = "." + (big ? number.Decimal() : std::to_string(value));
-        Write(buffer, space, text);
-        result += static_cast<int>(text.size());
+    try {
+        return NumericObjectText(buffer, space, object);
+    } catch (const std::bad_alloc&) {
+        LibreSslPutError_nid_no_patch(BigNumberLibrary, AnyFunction, AllocationFailure);
+        return 0;
     }
-    return result;
 }
 
 } // namespace
