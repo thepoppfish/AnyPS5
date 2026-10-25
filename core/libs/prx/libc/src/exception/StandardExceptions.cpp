@@ -718,7 +718,12 @@ static void CopyFutureError(LibcException::FutureErrorObject* self, const LibcEx
 }
 [[noreturn]] static void APS5_VABI RaiseFutureError_nid_no_patch(const LibcException::FutureErrorObject* self) {
     auto* object = static_cast<LibcException::FutureErrorObject*>(__cxa_allocate_exception_nid_postfix(sizeof(LibcException::FutureErrorObject)));
-    CopyFutureError(object, self);
+    try {
+        CopyFutureError(object, self);
+    } catch (...) {
+        __cxa_free_exception_nid_postfix(object);
+        throw;
+    }
     __cxa_throw_nid_postfix(object, reinterpret_cast<std::type_info*>(&_ZTISt12future_error_nid_postfix),
         reinterpret_cast<decltype(LibcException::Header::destructor)>(DestroyFutureError_nid_no_patch));
 }
