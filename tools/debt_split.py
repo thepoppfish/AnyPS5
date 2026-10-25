@@ -4,6 +4,7 @@ import posixpath
 import re
 import subprocess
 import sys
+from html.entities import html5
 from pathlib import Path
 
 from check_conventions import DEBT as INDEX, debt_name
@@ -11,6 +12,7 @@ from check_conventions import DEBT as INDEX, debt_name
 DEBT_DIR = "docs/dev/debt"
 HEADING = re.compile(r"^(#{1,6}) (.+?)\s*$")
 LINK = re.compile(r"\]\((<(?:\\[^\r\n]|[^<>\\\r\n])*>|[^<)\s][^)\s]*)\)")
+DESTINATION_ESCAPE = re.compile(r"\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])|&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]*);")
 
 
 def parse(text):
@@ -43,19 +45,39 @@ def key(kind, text):
     return debt_name(text) if kind == "entry" else None
 
 
+def destination_value(text):
+    def replace(match):
+        if match[1] is not None:
+            return match[1]
+        value = match[0]
+        if value.startswith("&#"):
+            digits = value[2:-1]
+            code = int(digits[1:], 16) if digits.startswith(("x", "X")) else int(digits)
+            return chr(code) if 0 < code <= 0x10ffff and not 0xd800 <= code <= 0xdfff else "\ufffd"
+        return html5.get(value[1:], value)
+    return DESTINATION_ESCAPE.sub(replace, text)
+
+
 def relink(text, source, destination):
     def replace(match):
         target = match.group(1)
         angled = target.startswith("<")
         if angled:
             target = target[1:-1]
-        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:|/", target):
+        value = destination_value(target)
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:|/", value):
             return match.group(0)
+        if angled:
+            prefix = posixpath.relpath(posixpath.dirname(source) or ".", posixpath.dirname(destination) or ".")
+            if not value or value.startswith(("#", "?")):
+                target = posixpath.basename(source) + target
+            moved = target if prefix == "." else prefix + "/" + target
+            return "](<" + moved + ">)"
         path, _, anchor = target.partition("#")
         resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path)) if path else source
         moved = posixpath.relpath(resolved, posixpath.dirname(destination))
         moved += "#" + anchor if anchor else ""
-        return "](" + ("<" + moved + ">" if angled else moved) + ")"
+        return "](" + moved + ")"
     return LINK.sub(replace, text)
 
 
