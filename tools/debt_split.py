@@ -11,7 +11,10 @@ from check_conventions import DEBT as INDEX, debt_name
 
 DEBT_DIR = "docs/dev/debt"
 HEADING = re.compile(r"^(#{1,6}) (.+?)\s*$")
-LINK = re.compile(r"\]\((<(?:\\[^\r\n]|[^<>\\\r\n])*>|[^<)\s][^)\s]*)\)")
+LINK_SPACE = r"[ \t]*(?:\r\n?|\n)?[ \t]*"
+LINK_TITLE = r'''(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\((?:\\[\s\S]|[^()\\])*\))'''
+LINK = re.compile(r"\]\(" + LINK_SPACE + r"(<(?:\\[^\r\n]|[^<>\\\r\n])*>|[^<)\s][^)\s]*)"
+                  + r"(?:(?=[ \t\r\n])" + LINK_SPACE + LINK_TITLE + r")?" + LINK_SPACE + r"\)")
 DESTINATION_ESCAPE = re.compile(r"\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])|&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]*);")
 
 
@@ -60,6 +63,8 @@ def destination_value(text):
 
 def relink(text, source, destination):
     def replace(match):
+        if re.search(r"(?:\r?\n|\r(?!\n))[ \t]*(?:\r?\n|\r)", match[0]):
+            return match[0]
         target = match.group(1)
         angled = target.startswith("<")
         if angled:
@@ -72,12 +77,14 @@ def relink(text, source, destination):
             if not value or value.startswith(("#", "?")):
                 target = posixpath.basename(source) + target
             moved = target if prefix == "." else prefix + "/" + target
-            return "](<" + moved + ">)"
-        path, _, anchor = target.partition("#")
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path)) if path else source
-        moved = posixpath.relpath(resolved, posixpath.dirname(destination))
-        moved += "#" + anchor if anchor else ""
-        return "](" + moved + ")"
+            moved = "<" + moved + ">"
+        else:
+            path, _, anchor = target.partition("#")
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path)) if path else source
+            moved = posixpath.relpath(resolved, posixpath.dirname(destination))
+            moved += "#" + anchor if anchor else ""
+        start, end = match.start(1) - match.start(), match.end(1) - match.start()
+        return match[0][:start] + moved + match[0][end:]
     return LINK.sub(replace, text)
 
 

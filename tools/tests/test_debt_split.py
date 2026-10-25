@@ -28,6 +28,30 @@ ORIGINAL = index([A_STUB, B_STUB, C_STUB], [A_FUNCTIONAL, SHADER, SHARED])
 
 
 class RelinkTests(unittest.TestCase):
+    def test_angle_destinations_preserve_whitespace_and_titles(self):
+        suffixes = ("", " ", "\t", '\n ', ' "Architecture"', " 'Architecture'", " (Architecture)",
+                    '  "Architecture" \t', ' ""', r' "A \"quoted\" title"', r" (A \) title)",
+                    ' "two\nlines"', '\n "Architecture"\n ', '\r\n "Architecture"\r\n ',
+                    ' "two\r\nlines"', ' "two\\\nlines"')
+        targets = {"ARCHITECTURE.md": "../ARCHITECTURE.md", "guide with spaces).md": "../guide with spaces).md",
+                   "#part": "../TechnicalDebt.md#part", "": "../TechnicalDebt.md",
+                   r"https\://example.test/guide": r"https\://example.test/guide"}
+        for target, expected in targets.items():
+            for leading in ("", " \t", "\n ", "\r\n "):
+                for suffix in suffixes:
+                    with self.subTest(target=target, leading=leading, suffix=suffix):
+                        text = f"[guide]({leading}<{target}>{suffix})"
+                        self.assertEqual(debt_split.relink(text, INDEX, "docs/dev/debt/libSceA.md"),
+                                         f"[guide]({leading}<{expected}>{suffix})")
+
+    def test_angle_destinations_reject_invalid_titles(self):
+        suffixes = ('"no separator"', ' "unfinished', ' (nested (title))', ' "first" "second"',
+                    '\n\n "blank separator"', ' "blank\n\nline"')
+        for suffix in suffixes:
+            with self.subTest(suffix=suffix):
+                text = f"[guide](<ARCHITECTURE.md>{suffix})"
+                self.assertEqual(debt_split.relink(text, INDEX, "docs/dev/debt/libSceA.md"), text)
+
     def test_angle_relative_destinations(self):
         targets = {
             "ARCHITECTURE.md": "../ARCHITECTURE.md",
@@ -186,6 +210,8 @@ class DebtSplitTests(unittest.TestCase):
         moved = self.read("docs/dev/debt/libSceA.md")
         extra = ("- [libSceA](../../core/libs/prx/libSceA/Three.cpp) - `sceAThree` returns 0"
                  " [angle](<../../docs/dev/guide with spaces).md#layout>)"
+                 ' [titled](<../../docs/dev/ARCHITECTURE.md> "Architecture")'
+                 " [spaced](<../../docs/dev/ARCHITECTURE.md> )"
                  " [escaped web](<https\\://example.test/guide>)")
         self.write(INDEX, self.read(INDEX).replace("Everything throws, except:\n", "Everything throws, except:\n\n" + extra))
         result = self.tool("split")
@@ -211,6 +237,7 @@ class DebtSplitTests(unittest.TestCase):
     def test_resolve_moves_added_edited_and_removed_entries(self):
         added = ("- [libSceA](../../core/libs/prx/libSceA/Export.cpp) - `sceAFour` returns 0"
                  " [guide](<guide with spaces).md#layout>) [web](<https://example.test/guide>)"
+                 ' [titled](<ARCHITECTURE.md> "Architecture") [spaced](<ARCHITECTURE.md> )'
                  " [mail](<mailto\\:author@example.test>)")
         edited = B_STUB + " and logs once"
         result = self.rebase([A_STUB, added, edited], [A_FUNCTIONAL, SHADER, SHARED])
@@ -226,6 +253,7 @@ class DebtSplitTests(unittest.TestCase):
         self.assertLess(a.index("`sceAFour`"), a.index("### Functional"))
         self.assertIn("[guide](<../guide with spaces).md#layout>) [web](<https://example.test/guide>)", a)
         self.assertIn("[mail](<mailto\\:author@example.test>)", a)
+        self.assertIn('[titled](<../ARCHITECTURE.md> "Architecture") [spaced](<../ARCHITECTURE.md> )', a)
         self.assertIn(edited.replace("../../", "../../../"), self.read("docs/dev/debt/libSceB.md"))
         self.assertFalse((self.root / "docs/dev/debt/libSceC.md").exists())
         self.assertEqual(self.read(INDEX), self.git("show", "main:" + INDEX).stdout)
