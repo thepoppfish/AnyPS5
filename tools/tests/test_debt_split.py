@@ -184,7 +184,9 @@ class DebtSplitTests(unittest.TestCase):
     def test_split_again_appends_to_existing_files(self):
         self.split()
         moved = self.read("docs/dev/debt/libSceA.md")
-        extra = "- [libSceA](../../core/libs/prx/libSceA/Three.cpp) - `sceAThree` returns 0"
+        extra = ("- [libSceA](../../core/libs/prx/libSceA/Three.cpp) - `sceAThree` returns 0"
+                 " [angle](<../../docs/dev/guide with spaces).md#layout>)"
+                 " [escaped web](<https\\://example.test/guide>)")
         self.write(INDEX, self.read(INDEX).replace("Everything throws, except:\n", "Everything throws, except:\n\n" + extra))
         result = self.tool("split")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
