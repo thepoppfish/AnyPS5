@@ -4,13 +4,18 @@ import posixpath
 import re
 import subprocess
 import sys
+from html.entities import html5
 from pathlib import Path
 
 from check_conventions import DEBT as INDEX, debt_name
 
 DEBT_DIR = "docs/dev/debt"
 HEADING = re.compile(r"^(#{1,6}) (.+?)\s*$")
-LINK = re.compile(r"\]\(([^)\s]+)\)")
+LINK_SPACE = r"[ \t]*(?:\r\n?|\n)?[ \t]*"
+LINK_TITLE = r'''(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\((?:\\[\s\S]|[^()\\])*\))'''
+LINK = re.compile(r"\]\(" + LINK_SPACE + r"(<(?:\\[^\r\n]|[^<>\\\r\n])*>|[^<)\s][^)\s]*)"
+                  + r"(?:(?=[ \t\r\n])" + LINK_SPACE + LINK_TITLE + r")?" + LINK_SPACE + r"\)")
+DESTINATION_ESCAPE = re.compile(r"\\([\x21-\x2f\x3a-\x40\x5b-\x60\x7b-\x7e])|&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]*);")
 
 
 def parse(text):
@@ -44,15 +49,43 @@ def key(kind, text):
 
 
 
+def destination_value(text):
+    def replace(match):
+        if match[1] is not None:
+            return match[1]
+        value = match[0]
+        if value.startswith("&#"):
+            digits = value[2:-1]
+            code = int(digits[1:], 16) if digits.startswith(("x", "X")) else int(digits)
+            return chr(code) if 0 < code <= 0x10ffff and not 0xd800 <= code <= 0xdfff else "\ufffd"
+        return html5.get(value[1:], value)
+    return DESTINATION_ESCAPE.sub(replace, text)
+
+
 def relink_unfenced(text, source, destination):
     def replace(match):
+        if re.search(r"(?:\r?\n|\r(?!\n))[ \t]*(?:\r?\n|\r)", match[0]):
+            return match[0]
         target = match.group(1)
-        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:|/", target):
+        angled = target.startswith("<")
+        if angled:
+            target = target[1:-1]
+        value = destination_value(target)
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:|/", value):
             return match.group(0)
-        path, _, anchor = target.partition("#")
-        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path)) if path else source
-        moved = posixpath.relpath(resolved, posixpath.dirname(destination))
-        return "](" + moved + ("#" + anchor if anchor else "") + ")"
+        if angled:
+            prefix = posixpath.relpath(posixpath.dirname(source) or ".", posixpath.dirname(destination) or ".")
+            if not value or value.startswith(("#", "?")):
+                target = posixpath.basename(source) + target
+            moved = target if prefix == "." else prefix + "/" + target
+            moved = "<" + moved + ">"
+        else:
+            path, _, anchor = target.partition("#")
+            resolved = posixpath.normpath(posixpath.join(posixpath.dirname(source), path)) if path else source
+            moved = posixpath.relpath(resolved, posixpath.dirname(destination))
+            moved += "#" + anchor if anchor else ""
+        start, end = match.start(1) - match.start(), match.end(1) - match.start()
+        return match[0][:start] + moved + match[0][end:]
 
     runs = list(re.finditer(r"`+", text))
     result = []
