@@ -766,6 +766,11 @@ if(BUILD_TESTING)
         configure_windows_unwind(rudp_poll_wait_allocation_tests)
         add_test(NAME rudp_poll_wait_allocation COMMAND rudp_poll_wait_allocation_tests)
         set_tests_properties(rudp_poll_wait_allocation PROPERTIES TIMEOUT 10 SKIP_RETURN_CODE 77)
+        if(MINGW AND ANYPS5_MINGW_DWARF_EXCEPTIONS)
+            target_link_libraries(rudp_poll_wait_allocation_tests PRIVATE libc)
+            set_tests_properties(rudp_poll_wait_allocation PROPERTIES ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
+        endif()
     endif()
 
     add_test_executable(guest_memory_pool_stats_tests tests/GuestMemoryPoolStats.cpp)
