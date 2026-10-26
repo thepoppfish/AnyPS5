@@ -99,6 +99,19 @@ int g_next_poll = 1;
 std::map<int, RudpPoll> g_polls;
 TimedWait::Condition g_polls_changed;
 
+struct RudpPollWaitRegistration {
+    int pollId;
+    std::unique_lock<std::mutex>& lock;
+
+    ~RudpPollWaitRegistration() {
+        if (!lock.owns_lock()) lock.lock();
+        const auto poll = g_polls.find(pollId);
+        if (poll == g_polls.end()) return;
+        --poll->second.waiters;
+        g_polls_changed.NotifyAll();
+    }
+};
+
 bool valid_ctx(int ctx) {
     return g_ctx.count(ctx) != 0;
 }
@@ -457,6 +470,7 @@ int APS5_VABI sceRudpPollWait(int pollId, RudpPollEvent* events, std::size_t eve
     }
     const uint64_t cancels = poll->second.cancels;
     ++poll->second.waiters;
+    const RudpPollWaitRegistration registration{pollId, lk};
     const auto woken = [pollId, cancels] {
         if (!g_inited) {
             return true;
@@ -477,8 +491,6 @@ int APS5_VABI sceRudpPollWait(int pollId, RudpPollEvent* events, std::size_t eve
     if (current == g_polls.end()) {
         return RUDP_ERROR_INVALID_POLL_ID;
     }
-    --current->second.waiters;
-    g_polls_changed.NotifyAll();
     return signalled ? RUDP_ERROR_CANCELLED : 0;
 }
 
